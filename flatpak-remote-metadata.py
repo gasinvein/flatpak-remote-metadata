@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import logging
 import json
 import sys
 import re
@@ -11,10 +12,14 @@ import gi
 gi.require_version("GLib", "2.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("Flatpak", "1.0")
+gi.require_version("OSTree", "1.0")
 from gi.repository import GLib
 from gi.repository import Gio
 from gi.repository import Flatpak
+from gi.repository import OSTree
 
+
+PROGRAM_NAME = "flatpak-remote-metadata"
 
 MEATADATA_TYPES = [
     (re.compile(g), re.compile(k), t)
@@ -32,6 +37,8 @@ MEATADATA_TYPES = [
         (r"Build", r"built-extensions", list),
     ]
 ]
+
+log = logging.getLogger(PROGRAM_NAME)
 
 def get_value(metadata: GLib.KeyFile, group: str, key: str):
     for group_re, key_re, cls in MEATADATA_TYPES:
@@ -61,8 +68,23 @@ def metadata_to_dict(metadata: GLib.KeyFile):
     return result
 
 
+def load_ostree_file(ref_root: OSTree.RepoFile, path: str) -> GLib.Bytes:
+    repo_file = ref_root.resolve_relative_path(path)
+    file_size = repo_file.query_info(Gio.FILE_ATTRIBUTE_STANDARD_SIZE,
+                                     Gio.FileQueryInfoFlags.NONE).get_size()
+    stream = repo_file.read()
+    gbytes = stream.read_bytes(file_size)
+    stream.close()
+    return gbytes
+
+
 def get_apps_metadata(installation: Flatpak.Installation, remote: str):
+    repo = OSTree.Repo.new(installation.get_path().get_child("repo"))
+    repo.open()
+
     apps = []
+    log.debug("Fetching refs from remote %s", remote)
+    refs = []
     for ref in installation.list_remote_refs_sync_full(remote, Flatpak.QueryFlags.NONE):
         if ref.get_kind() != Flatpak.RefKind.APP:
             continue
@@ -70,9 +92,28 @@ def get_apps_metadata(installation: Flatpak.Installation, remote: str):
             continue
         if ref.get_eol() or ref.get_eol_rebase():
             continue
+        refs.append(ref)
+
+    log.debug("Pulling ref files from %s", remote)
+    repo.pull_with_options(remote, GLib.Variant("a{sv}", {
+        "refs": GLib.Variant("as", [ref.format_ref() for ref in refs]),
+        "subdirs": GLib.Variant("as", ["/metadata", "/files/manifest.json"]),
+        "disable-static-deltas": GLib.Variant("b", True),
+        "timestamp-check": GLib.Variant("b", True),
+        "gpg-verify": GLib.Variant("b", False),
+    }))
+
+    log.debug("Fetching metadata from %s", remote)
+    for ref in refs:
+        log.debug("Loading metadata from ref %s", ref.format_ref())
+        _success, ref_root, _ref_commit = repo.read_commit(ref.format_ref())
+
+        metadata_bytes = load_ostree_file(ref_root, "metadata")
         metadata = GLib.KeyFile()
-        metadata.load_from_bytes(ref.get_metadata(), GLib.KeyFileFlags.NONE)
+        metadata.load_from_bytes(metadata_bytes, GLib.KeyFileFlags.NONE)
+
         apps.append(metadata)
+
     return apps
 
 
@@ -82,8 +123,10 @@ def main():
     parser.add_argument("repo_name")
     args = parser.parse_args()
 
+    logging.basicConfig(level=logging.DEBUG)
+
     cache_home = Gio.File.new_for_path(GLib.get_user_cache_dir())
-    inst_dir = cache_home.get_child("flatpak-remote-metadata").get_child("inst")
+    inst_dir = cache_home.get_child(PROGRAM_NAME).get_child("inst")
     if not inst_dir.query_exists():
         inst_dir.make_directory_with_parents()
     inst = Flatpak.Installation.new_for_path(inst_dir, True)
@@ -94,6 +137,7 @@ def main():
         if args.url and err.matches(Flatpak.error_quark(), Flatpak.Error.REMOTE_NOT_FOUND):
             remote = Flatpak.Remote.new(args.repo_name)
             remote.set_url(args.url)
+            log.info("Adding remote %s to installation %s", remote.get_name(), inst_dir.get_path())
             inst.add_remote(remote, if_needed=True)
         else:
             raise
