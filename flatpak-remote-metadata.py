@@ -41,7 +41,9 @@ MEATADATA_TYPES = [
 
 log = logging.getLogger(PROGRAM_NAME)
 
-def get_value(metadata: GLib.KeyFile, group: str, key: str):
+def get_value(metadata: GLib.KeyFile,
+              group: str,
+              key: str) -> t.Union[str, int, bool, t.List[str]]:
     for group_re, key_re, cls in MEATADATA_TYPES:
         if group_re.fullmatch(group) and key_re.fullmatch(key):
             if cls is bool:
@@ -53,7 +55,7 @@ def get_value(metadata: GLib.KeyFile, group: str, key: str):
     return metadata.get_string(group, key)
 
 
-def metadata_to_dict(metadata: GLib.KeyFile):
+def metadata_to_dict(metadata: GLib.KeyFile) -> t.Dict[str, t.Any]:
     result: t.Dict[str, t.Any] = {}
     groups, _ = metadata.get_groups()
     for group in groups:
@@ -79,7 +81,8 @@ def load_ostree_file(ref_root: OSTree.RepoFile, path: str) -> GLib.Bytes:
     return gbytes
 
 
-def get_apps_metadata(installation: Flatpak.Installation, remote: str):
+def get_apps_metadata(installation: Flatpak.Installation,
+                      remote: str) -> t.Iterator[t.Tuple[GLib.KeyFile, t.Dict[str, t.Any]]]:
     repo = OSTree.Repo.new(installation.get_path().get_child("repo"))
     repo.open()
 
@@ -152,7 +155,7 @@ def main():
 
     result = []
 
-    for (metadata, manifest) in get_apps_metadata(inst, remote.get_name()):
+    for metadata, manifest in get_apps_metadata(inst, remote.get_name()):
         result.append({
             "metadata": metadata_to_dict(metadata),
             "manifest": manifest,
