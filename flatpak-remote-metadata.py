@@ -82,7 +82,6 @@ def get_apps_metadata(installation: Flatpak.Installation, remote: str):
     repo = OSTree.Repo.new(installation.get_path().get_child("repo"))
     repo.open()
 
-    apps = []
     log.debug("Fetching refs from remote %s", remote)
     refs = []
     for ref in installation.list_remote_refs_sync_full(remote, Flatpak.QueryFlags.NONE):
@@ -112,9 +111,7 @@ def get_apps_metadata(installation: Flatpak.Installation, remote: str):
         metadata = GLib.KeyFile()
         metadata.load_from_bytes(metadata_bytes, GLib.KeyFileFlags.NONE)
 
-        apps.append(metadata)
-
-    return apps
+        yield metadata
 
 
 def main():
@@ -142,8 +139,12 @@ def main():
         else:
             raise
 
-    metas = [metadata_to_dict(m) for m in get_apps_metadata(inst, remote.get_name())]
-    json.dump(metas, sys.stdout, indent=4)
+    result = []
+
+    for metadata in get_apps_metadata(inst, remote.get_name()):
+        result.append(metadata_to_dict(metadata))
+
+    json.dump(result, sys.stdout, indent=4)
 
 
 if __name__ == "__main__":
