@@ -5,6 +5,7 @@ import logging
 import json
 import sys
 import re
+import io
 import typing as t
 
 import gi
@@ -111,7 +112,17 @@ def get_apps_metadata(installation: Flatpak.Installation, remote: str):
         metadata = GLib.KeyFile()
         metadata.load_from_bytes(metadata_bytes, GLib.KeyFileFlags.NONE)
 
-        yield metadata
+        try:
+            manifest_bytes = load_ostree_file(ref_root, "files/manifest.json")
+            with io.BytesIO(manifest_bytes.get_data()) as mf_io:
+                manifest = json.load(mf_io)
+        except GLib.Error as err:
+            if err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_FOUND):
+                manifest = None
+            else:
+                raise
+
+        yield (metadata, manifest)
 
 
 def main():
@@ -141,8 +152,11 @@ def main():
 
     result = []
 
-    for metadata in get_apps_metadata(inst, remote.get_name()):
-        result.append(metadata_to_dict(metadata))
+    for (metadata, manifest) in get_apps_metadata(inst, remote.get_name()):
+        result.append({
+            "metadata": metadata_to_dict(metadata),
+            "manifest": manifest,
+        })
 
     json.dump(result, sys.stdout, indent=4)
 
