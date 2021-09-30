@@ -102,7 +102,6 @@ def get_apps_metadata(installation: Flatpak.Installation,
         "refs": GLib.Variant("as", [ref.format_ref() for ref in refs]),
         "subdirs": GLib.Variant("as", ["/metadata", "/files/manifest.json"]),
         "disable-static-deltas": GLib.Variant("b", True),
-        "timestamp-check": GLib.Variant("b", True),
         "gpg-verify": GLib.Variant("b", False),
     }))
 
