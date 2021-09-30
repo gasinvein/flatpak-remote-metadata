@@ -82,7 +82,9 @@ def load_ostree_file(ref_root: OSTree.RepoFile, path: str) -> GLib.Bytes:
 
 
 def get_apps_metadata(installation: Flatpak.Installation,
-                      remote: str) -> t.Iterator[t.Tuple[GLib.KeyFile, t.Dict[str, t.Any]]]:
+                      remote: str) -> t.Iterator[t.Tuple[Flatpak.Ref,
+                                                         GLib.KeyFile,
+                                                         t.Dict[str, t.Any]]]:
     repo = OSTree.Repo.new(installation.get_path().get_child("repo"))
     repo.open()
 
@@ -124,7 +126,7 @@ def get_apps_metadata(installation: Flatpak.Installation,
             else:
                 raise
 
-        yield (metadata, manifest)
+        yield (ref, metadata, manifest)
 
 
 def main():
@@ -154,8 +156,9 @@ def main():
 
     result = []
 
-    for metadata, manifest in get_apps_metadata(inst, remote.get_name()):
+    for ref, metadata, manifest in get_apps_metadata(inst, remote.get_name()):
         result.append({
+            "ref": ref.format_ref(),
             "metadata": metadata_to_dict(metadata),
             "manifest": manifest,
         })
