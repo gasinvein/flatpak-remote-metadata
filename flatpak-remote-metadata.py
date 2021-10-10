@@ -7,6 +7,7 @@ import sys
 import re
 import io
 import typing as t
+import dataclasses
 
 import gi
 
@@ -40,6 +41,15 @@ MEATADATA_TYPES = [
 ]
 
 log = logging.getLogger(PROGRAM_NAME)
+
+
+@dataclasses.dataclass
+class Options:
+    remote_name: str
+    remote_url: t.Optional[str]
+    pull: bool
+    get_manifest: bool
+
 
 def get_value(metadata: GLib.KeyFile,
               group: str,
@@ -82,9 +92,10 @@ def load_ostree_file(ref_root: OSTree.RepoFile, path: str) -> GLib.Bytes:
 
 
 def get_apps_metadata(installation: Flatpak.Installation,
-                      remote: str) -> t.Iterator[t.Tuple[Flatpak.Ref,
-                                                         GLib.KeyFile,
-                                                         t.Dict[str, t.Any]]]:
+                      remote: str,
+                      opts: Options) -> t.Iterator[t.Tuple[Flatpak.Ref,
+                                                   GLib.KeyFile,
+                                                   t.Dict[str, t.Any]]]:
     repo = OSTree.Repo.new(installation.get_path().get_child("repo"))
     repo.open()
 
@@ -97,32 +108,39 @@ def get_apps_metadata(installation: Flatpak.Installation,
             continue
         refs.append(ref)
 
-    log.debug("Pulling ref files from %s", remote)
-    repo.pull_with_options(remote, GLib.Variant("a{sv}", {
-        "refs": GLib.Variant("as", [ref.format_ref() for ref in refs]),
-        "subdirs": GLib.Variant("as", ["/metadata", "/files/manifest.json"]),
-        "disable-static-deltas": GLib.Variant("b", True),
-        "gpg-verify": GLib.Variant("b", False),
-    }))
+    if opts.pull:
+        log.debug("Pulling ref files from %s", remote)
+        repo.pull_with_options(remote, GLib.Variant("a{sv}", {
+            "refs": GLib.Variant("as", [ref.format_ref() for ref in refs]),
+            "subdirs": GLib.Variant("as", ["/metadata", "/files/manifest.json"]),
+            "disable-static-deltas": GLib.Variant("b", True),
+            "gpg-verify": GLib.Variant("b", False),
+        }))
 
     log.debug("Fetching metadata from %s", remote)
     for ref in refs:
         log.debug("Loading metadata from ref %s", ref.format_ref())
         _success, ref_root, _ref_commit = repo.read_commit(ref.format_ref())
 
-        metadata_bytes = load_ostree_file(ref_root, "metadata")
         metadata = GLib.KeyFile()
+        if opts.pull:
+            metadata_bytes = load_ostree_file(ref_root, "metadata")
+        else:
+            metadata_bytes = ref.get_metadata()
         metadata.load_from_bytes(metadata_bytes, GLib.KeyFileFlags.NONE)
 
-        try:
-            manifest_bytes = load_ostree_file(ref_root, "files/manifest.json")
-            with io.BytesIO(manifest_bytes.get_data()) as mf_io:
-                manifest = json.load(mf_io)
-        except GLib.Error as err:
-            if err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_FOUND):
-                manifest = None
-            else:
-                raise
+        if opts.get_manifest:
+            try:
+                manifest_bytes = load_ostree_file(ref_root, "files/manifest.json")
+                with io.BytesIO(manifest_bytes.get_data()) as mf_io:
+                    manifest = json.load(mf_io)
+            except GLib.Error as err:
+                if err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_FOUND):
+                    manifest = None
+                else:
+                    raise
+        else:
+            manifest = None
 
         yield (ref, metadata, manifest)
 
@@ -130,8 +148,15 @@ def get_apps_metadata(installation: Flatpak.Installation,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--url")
+    parser.add_argument("--no-pull", action="store_true")
+    parser.add_argument("--no-manifest", action="store_true")
     parser.add_argument("repo_name")
     args = parser.parse_args()
+
+    opts = Options(remote_name=args.repo_name,
+                   remote_url=args.url,
+                   pull=not args.no_pull,
+                   get_manifest=not args.no_manifest)
 
     logging.basicConfig(level=logging.DEBUG)
 
@@ -142,11 +167,11 @@ def main():
     inst = Flatpak.Installation.new_for_path(inst_dir, True)
 
     try:
-        remote = inst.get_remote_by_name(args.repo_name)
+        remote = inst.get_remote_by_name(opts.remote_name)
     except GLib.Error as err:
-        if args.url and err.matches(Flatpak.error_quark(), Flatpak.Error.REMOTE_NOT_FOUND):
-            remote = Flatpak.Remote.new(args.repo_name)
-            remote.set_url(args.url)
+        if opts.remote_url and err.matches(Flatpak.error_quark(), Flatpak.Error.REMOTE_NOT_FOUND):
+            remote = Flatpak.Remote.new(opts.remote_name)
+            remote.set_url(opts.remote_url)
             log.info("Adding remote %s to installation %s", remote.get_name(), inst_dir.get_path())
             inst.add_remote(remote, if_needed=True)
         else:
@@ -154,7 +179,7 @@ def main():
 
     result = []
 
-    for ref, metadata, manifest in get_apps_metadata(inst, remote.get_name()):
+    for ref, metadata, manifest in get_apps_metadata(inst, remote.get_name(), opts):
         result.append({
             "ref": ref.format_ref(),
             "metadata": metadata_to_dict(metadata),
