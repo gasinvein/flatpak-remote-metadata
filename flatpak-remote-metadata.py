@@ -91,8 +91,6 @@ def get_apps_metadata(installation: Flatpak.Installation,
     log.debug("Fetching refs from remote %s", remote)
     refs = []
     for ref in installation.list_remote_refs_sync_full(remote, Flatpak.QueryFlags.NONE):
-        if ref.get_kind() != Flatpak.RefKind.APP:
-            continue
         if ref.get_arch() != "x86_64":
             continue
         if ref.get_eol() or ref.get_eol_rebase():
