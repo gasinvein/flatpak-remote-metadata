@@ -120,16 +120,19 @@ def get_apps_metadata(installation: Flatpak.Installation,
     log.debug("Fetching metadata from %s", remote)
     for ref in refs:
         log.debug("Loading metadata from ref %s", ref.format_ref())
-        _success, ref_root, _ref_commit = repo.read_commit(ref.format_ref())
+        if opts.pull:
+            _success, ref_root, _ref_commit = repo.read_commit(ref.format_ref())
+        else:
+            ref_root = None
 
         metadata = GLib.KeyFile()
-        if opts.pull:
+        if ref_root is not None:
             metadata_bytes = load_ostree_file(ref_root, "metadata")
         else:
             metadata_bytes = ref.get_metadata()
         metadata.load_from_bytes(metadata_bytes, GLib.KeyFileFlags.NONE)
 
-        if opts.get_manifest:
+        if opts.get_manifest and ref_root is not None:
             try:
                 manifest_bytes = load_ostree_file(ref_root, "files/manifest.json")
                 with io.BytesIO(manifest_bytes.get_data()) as mf_io:
