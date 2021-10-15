@@ -120,10 +120,14 @@ def get_apps_metadata(installation: Flatpak.Installation,
     log.debug("Fetching metadata from %s", remote)
     for ref in refs:
         log.debug("Loading metadata from ref %s", ref.format_ref())
-        if opts.pull:
+        try:
             _success, ref_root, _ref_commit = repo.read_commit(ref.format_ref())
-        else:
-            ref_root = None
+        except GLib.Error as err:
+            if err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_FOUND):
+                log.error("Can't read local ref: %s", err.message)  # pylint: disable=no-member
+                ref_root = None
+            else:
+                raise
 
         metadata = GLib.KeyFile()
         if ref_root is not None:
