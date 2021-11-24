@@ -109,10 +109,14 @@ def get_apps_metadata(installation: Flatpak.Installation,
         refs.append(ref)
 
     if opts.pull:
+        pull_files = ["/metadata"]
+        if opts.get_manifest:
+            pull_files += ["/files/manifest.json"]
+
         log.debug("Pulling ref files from %s", remote)
         repo.pull_with_options(remote, GLib.Variant("a{sv}", {
             "refs": GLib.Variant("as", [ref.format_ref() for ref in refs]),
-            "subdirs": GLib.Variant("as", ["/metadata", "/files/manifest.json"]),
+            "subdirs": GLib.Variant("as", pull_files),
             "disable-static-deltas": GLib.Variant("b", True),
             "gpg-verify": GLib.Variant("b", False),
         }))
