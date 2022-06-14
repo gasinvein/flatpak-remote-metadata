@@ -47,6 +47,7 @@ log = logging.getLogger(PROGRAM_NAME)
 class Options:
     remote_name: str
     remote_url: t.Optional[str]
+    refs: t.List[str]
     pull: bool
     get_manifest: bool
 
@@ -102,6 +103,8 @@ def get_apps_metadata(installation: Flatpak.Installation,
     log.debug("Fetching refs from remote %s", remote)
     refs = []
     for ref in installation.list_remote_refs_sync_full(remote, Flatpak.QueryFlags.NONE):
+        if opts.refs and ref.format_ref() not in opts.refs:
+            continue
         if ref.get_arch() != "x86_64":
             continue
         if ref.get_eol() or ref.get_eol_rebase():
@@ -159,6 +162,7 @@ def get_apps_metadata(installation: Flatpak.Installation,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--url")
+    parser.add_argument("-r", "--ref", nargs="+")
     parser.add_argument("--no-pull", action="store_true")
     parser.add_argument("--no-manifest", action="store_true")
     parser.add_argument("repo_name")
@@ -166,6 +170,7 @@ def main():
 
     opts = Options(remote_name=args.repo_name,
                    remote_url=args.url,
+                   refs=args.ref,
                    pull=not args.no_pull,
                    get_manifest=not args.no_manifest)
 
