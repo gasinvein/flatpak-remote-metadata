@@ -97,10 +97,15 @@ def get_apps_metadata(installation: Flatpak.Installation,
                       opts: Options) -> t.Iterator[t.Tuple[Flatpak.Ref,
                                                    GLib.KeyFile,
                                                    t.Dict[str, t.Any]]]:
+    def progress_cb(progress: OSTree.AsyncProgress, *args, **kwargs):
+        log.info("Progress: objects fetched: %i/%i",
+                 progress.get_uint("fetched"),
+                 progress.get_uint("requested"))
+
     repo = OSTree.Repo.new(installation.get_path().get_child("repo"))
     repo.open()
 
-    log.debug("Fetching refs from remote %s", remote)
+    log.info("Fetching refs from remote %s", remote)
     refs = []
     for ref in installation.list_remote_refs_sync_full(remote, Flatpak.QueryFlags.NONE):
         if opts.refs and ref.format_ref() not in opts.refs:
@@ -116,13 +121,21 @@ def get_apps_metadata(installation: Flatpak.Installation,
         if opts.get_manifest:
             pull_files += ["/files/manifest.json"]
 
-        log.debug("Pulling ref files from %s", remote)
-        repo.pull_with_options(remote, GLib.Variant("a{sv}", {
-            "refs": GLib.Variant("as", [ref.format_ref() for ref in refs]),
-            "subdirs": GLib.Variant("as", pull_files),
-            "disable-static-deltas": GLib.Variant("b", True),
-            "gpg-verify": GLib.Variant("b", False),
-        }))
+        progress = OSTree.AsyncProgress.new()
+        progress.connect("changed", progress_cb, None)
+
+        log.info("Pulling ref files from %s", remote)
+        repo.pull_with_options(remote,
+                               GLib.Variant("a{sv}", {
+                                   "refs": GLib.Variant("as", [ref.format_ref() for ref in refs]),
+                                   "subdirs": GLib.Variant("as", pull_files),
+                                   "disable-static-deltas": GLib.Variant("b", True),
+                                   "gpg-verify": GLib.Variant("b", False),
+                                }),
+                                progress,
+                                None)
+
+        progress.finish()
 
     log.debug("Fetching metadata from %s", remote)
     for ref in refs:
@@ -174,7 +187,7 @@ def main():
                    pull=not args.no_pull,
                    get_manifest=not args.no_manifest)
 
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     cache_home = Gio.File.new_for_path(GLib.get_user_cache_dir())
     inst_dir = cache_home.get_child(PROGRAM_NAME).get_child("inst")
