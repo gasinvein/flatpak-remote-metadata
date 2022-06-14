@@ -98,9 +98,12 @@ def get_apps_metadata(installation: Flatpak.Installation,
                                                    GLib.KeyFile,
                                                    t.Dict[str, t.Any]]]:
     def progress_cb(progress: OSTree.AsyncProgress, *args, **kwargs):
-        log.info("Progress: objects fetched: %i/%i",
-                 progress.get_uint("fetched"),
-                 progress.get_uint("requested"))
+        fetched = progress.get_uint("fetched")
+        requested = progress.get_uint("requested")
+        log.info("Progress %.2f%% : objects fetched: %i/%i",
+                 fetched * 100 / requested,
+                 fetched,
+                 requested)
 
     repo = OSTree.Repo.new(installation.get_path().get_child("repo"))
     repo.open()
