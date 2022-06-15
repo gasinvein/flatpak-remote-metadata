@@ -6,6 +6,7 @@ import json
 import sys
 import re
 import io
+import signal
 import typing as t
 import dataclasses
 
@@ -82,21 +83,26 @@ def metadata_to_dict(metadata: GLib.KeyFile) -> t.Dict[str, t.Any]:
     return result
 
 
-def load_ostree_file(ref_root: OSTree.RepoFile, path: str) -> GLib.Bytes:
+def load_ostree_file(ref_root: OSTree.RepoFile,
+                     path: str,
+                     cancellable: Gio.Cancellable = None) -> GLib.Bytes:
     repo_file = ref_root.resolve_relative_path(path)
     file_size = repo_file.query_info(Gio.FILE_ATTRIBUTE_STANDARD_SIZE,
-                                     Gio.FileQueryInfoFlags.NONE).get_size()
-    stream = repo_file.read()
-    gbytes = stream.read_bytes(file_size)
-    stream.close()
+                                     Gio.FileQueryInfoFlags.NONE,
+                                     cancellable).get_size()
+    stream = repo_file.read(cancellable)
+    gbytes = stream.read_bytes(file_size, cancellable)
+    stream.close(cancellable)
     return gbytes
 
 
 def get_apps_metadata(installation: Flatpak.Installation,
                       remote: str,
-                      opts: Options) -> t.Iterator[t.Tuple[Flatpak.Ref,
-                                                   GLib.KeyFile,
-                                                   t.Dict[str, t.Any]]]:
+                      opts: Options,
+                      cancellable: Gio.Cancellable = None) -> \
+                      t.Iterator[t.Tuple[Flatpak.Ref,
+                                         GLib.KeyFile,
+                                         t.Dict[str, t.Any]]]:
     def progress_cb(progress: OSTree.AsyncProgress, *args, **kwargs):
         fetched = progress.get_uint("fetched")
         requested = progress.get_uint("requested")
@@ -106,11 +112,13 @@ def get_apps_metadata(installation: Flatpak.Installation,
                  requested)
 
     repo = OSTree.Repo.new(installation.get_path().get_child("repo"))
-    repo.open()
+    repo.open(cancellable)
 
     log.info("Fetching refs from remote %s", remote)
     refs = []
-    for ref in installation.list_remote_refs_sync_full(remote, Flatpak.QueryFlags.NONE):
+    for ref in installation.list_remote_refs_sync_full(remote,
+                                                       Flatpak.QueryFlags.NONE,
+                                                       cancellable):
         if opts.refs and ref.format_ref() not in opts.refs:
             continue
         if ref.get_arch() != "x86_64":
@@ -134,9 +142,9 @@ def get_apps_metadata(installation: Flatpak.Installation,
                                    "subdirs": GLib.Variant("as", pull_files),
                                    "disable-static-deltas": GLib.Variant("b", True),
                                    "gpg-verify": GLib.Variant("b", False),
-                                }),
-                                progress,
-                                None)
+                               }),
+                               progress,
+                               cancellable)
 
         progress.finish()
 
@@ -144,7 +152,7 @@ def get_apps_metadata(installation: Flatpak.Installation,
     for ref in refs:
         log.debug("Loading metadata from ref %s", ref.format_ref())
         try:
-            _success, ref_root, _ref_commit = repo.read_commit(ref.format_ref())
+            _success, ref_root, _ref_commit = repo.read_commit(ref.format_ref(), cancellable)
         except GLib.Error as err:
             if err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_FOUND):
                 log.error("Can't read local ref: %s", err.message)  # pylint: disable=no-member
@@ -154,14 +162,14 @@ def get_apps_metadata(installation: Flatpak.Installation,
 
         metadata = GLib.KeyFile()
         if ref_root is not None:
-            metadata_bytes = load_ostree_file(ref_root, "metadata")
+            metadata_bytes = load_ostree_file(ref_root, "metadata", cancellable)
         else:
             metadata_bytes = ref.get_metadata()
         metadata.load_from_bytes(metadata_bytes, GLib.KeyFileFlags.NONE)
 
         if opts.get_manifest and ref_root is not None:
             try:
-                manifest_bytes = load_ostree_file(ref_root, "files/manifest.json")
+                manifest_bytes = load_ostree_file(ref_root, "files/manifest.json", cancellable)
                 with io.BytesIO(manifest_bytes.get_data()) as mf_io:
                     manifest = json.load(mf_io)
             except GLib.Error as err:
@@ -192,26 +200,36 @@ def main():
 
     logging.basicConfig(level=logging.INFO)
 
+    cancellable = Gio.Cancellable.new()
+
+    def abort(sign, *_):
+        log.info("Caught signal %s, exiting", signal.strsignal(sign))
+        cancellable.cancel()
+        sys.exit(1)
+
+    for sig in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
+        signal.signal(sig, abort)
+
     cache_home = Gio.File.new_for_path(GLib.get_user_cache_dir())
     inst_dir = cache_home.get_child(PROGRAM_NAME).get_child("inst")
-    if not inst_dir.query_exists():
-        inst_dir.make_directory_with_parents()
-    inst = Flatpak.Installation.new_for_path(inst_dir, True)
+    if not inst_dir.query_exists(cancellable):
+        inst_dir.make_directory_with_parents(cancellable)
+    inst = Flatpak.Installation.new_for_path(inst_dir, True, cancellable)
 
     try:
-        remote = inst.get_remote_by_name(opts.remote_name)
+        remote = inst.get_remote_by_name(opts.remote_name, cancellable)
     except GLib.Error as err:
         if opts.remote_url and err.matches(Flatpak.error_quark(), Flatpak.Error.REMOTE_NOT_FOUND):
             remote = Flatpak.Remote.new(opts.remote_name)
             remote.set_url(opts.remote_url)
             log.info("Adding remote %s to installation %s", remote.get_name(), inst_dir.get_path())
-            inst.add_remote(remote, if_needed=True)
+            inst.add_remote(remote, if_needed=True, cancellable=cancellable)
         else:
             raise
 
     result = []
 
-    for ref, metadata, manifest in get_apps_metadata(inst, remote.get_name(), opts):
+    for ref, metadata, manifest in get_apps_metadata(inst, remote.get_name(), opts, cancellable):
         result.append({
             "ref": ref.format_ref(),
             "metadata": metadata_to_dict(metadata),
