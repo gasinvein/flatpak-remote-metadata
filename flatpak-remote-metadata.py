@@ -189,6 +189,7 @@ def main():
     parser.add_argument("-r", "--ref", nargs="+")
     parser.add_argument("--no-pull", action="store_true")
     parser.add_argument("--no-manifest", action="store_true")
+    parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("repo_name")
     args = parser.parse_args()
 
@@ -198,7 +199,7 @@ def main():
                    pull=not args.no_pull,
                    get_manifest=not args.no_manifest)
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
     cancellable = Gio.Cancellable.new()
 
