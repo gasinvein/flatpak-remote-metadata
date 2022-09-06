@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from typing import Optional
 import argparse
 import logging
 import json
@@ -50,7 +51,9 @@ class Options:
     remote_url: t.Optional[str]
     refs: t.List[str]
     pull: bool
+    get_metadata: bool
     get_manifest: bool
+    get_built_extensions: bool
 
 
 def get_value(metadata: GLib.KeyFile,
@@ -67,7 +70,9 @@ def get_value(metadata: GLib.KeyFile,
     return metadata.get_string(group, key)
 
 
-def metadata_to_dict(metadata: GLib.KeyFile) -> t.Dict[str, t.Any]:
+def metadata_to_dict(metadata: Optional[GLib.KeyFile]) -> Optional[t.Dict[str, t.Any]]:
+    if metadata is None:
+        return None
     result: t.Dict[str, t.Any] = {}
     groups, _ = metadata.get_groups()
     for group in groups:
@@ -94,6 +99,10 @@ def load_ostree_file(ref_root: OSTree.RepoFile,
     gbytes = stream.read_bytes(file_size, cancellable)
     stream.close(cancellable)
     return gbytes
+
+
+def is_built_extension(app_id: str) -> bool:
+    return app_id.endswith(".Sources") or app_id.endswith(".Locale") or app_id.endswith(".Debug")
 
 
 def get_apps_metadata(installation: Flatpak.Installation,
@@ -124,6 +133,8 @@ def get_apps_metadata(installation: Flatpak.Installation,
         if ref.get_arch() != "x86_64":
             continue
         if ref.get_eol() or ref.get_eol_rebase():
+            continue
+        if not opts.get_built_extensions and is_built_extension(ref.get_name()):
             continue
         refs.append(ref)
 
@@ -160,14 +171,17 @@ def get_apps_metadata(installation: Flatpak.Installation,
             else:
                 raise
 
-        metadata = GLib.KeyFile()
-        if ref_root is not None:
-            metadata_bytes = load_ostree_file(ref_root, "metadata", cancellable)
+        if opts.get_metadata:
+            metadata = GLib.KeyFile()
+            if ref_root is not None:
+                metadata_bytes = load_ostree_file(ref_root, "metadata", cancellable)
+            else:
+                metadata_bytes = ref.get_metadata()
+            metadata.load_from_bytes(metadata_bytes, GLib.KeyFileFlags.NONE)
         else:
-            metadata_bytes = ref.get_metadata()
-        metadata.load_from_bytes(metadata_bytes, GLib.KeyFileFlags.NONE)
+            metadata = None
 
-        if opts.get_manifest and ref_root is not None:
+        if opts.get_manifest and ref_root is not None and not is_built_extension(ref.get_name()):
             try:
                 manifest_bytes = load_ostree_file(ref_root, "files/manifest.json", cancellable)
                 with io.BytesIO(manifest_bytes.get_data()) as mf_io:
@@ -188,8 +202,11 @@ def main():
     parser.add_argument("-u", "--url")
     parser.add_argument("-r", "--ref", nargs="+")
     parser.add_argument("--no-pull", action="store_true")
+    parser.add_argument("--no-metadata", action="store_true")
     parser.add_argument("--no-manifest", action="store_true")
+    parser.add_argument("--no-built-extensions", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("-o", "--output")
     parser.add_argument("repo_name")
     args = parser.parse_args()
 
@@ -197,7 +214,9 @@ def main():
                    remote_url=args.url,
                    refs=args.ref,
                    pull=not args.no_pull,
-                   get_manifest=not args.no_manifest)
+                   get_metadata=not args.no_metadata,
+                   get_manifest=not args.no_manifest,
+                   get_built_extensions=not args.no_built_extensions)
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
@@ -237,7 +256,11 @@ def main():
             "manifest": manifest,
         })
 
-    json.dump(result, sys.stdout, indent=4)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=4)
+    else:
+        json.dump(result, sys.stdout, indent=4)
 
 
 if __name__ == "__main__":
